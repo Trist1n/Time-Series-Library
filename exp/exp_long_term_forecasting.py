@@ -171,8 +171,16 @@ class Exp_Long_Term_Forecast(Exp_Basic):
             print('loading model')
             self.model.load_state_dict(torch.load(os.path.join('./checkpoints/' + setting, 'checkpoint.pth')))
 
+        save_predictions = bool(getattr(self.args, 'save_predictions', 1))
         preds = []
         trues = []
+        metric_sums = {
+            'abs': 0.0,
+            'sq': 0.0,
+            'ape': 0.0,
+            'spe': 0.0,
+            'count': 0,
+        }
         folder_path = './test_results/' + setting + '/'
         if not os.path.exists(folder_path):
             os.makedirs(folder_path)
@@ -214,8 +222,16 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                 pred = outputs
                 true = batch_y
 
-                preds.append(pred)
-                trues.append(true)
+                if save_predictions:
+                    preds.append(pred)
+                    trues.append(true)
+                else:
+                    diff = pred - true
+                    metric_sums['abs'] += np.abs(diff).sum(dtype=np.float64)
+                    metric_sums['sq'] += np.square(diff).sum(dtype=np.float64)
+                    metric_sums['ape'] += np.abs(diff / true).sum(dtype=np.float64)
+                    metric_sums['spe'] += np.square(diff / true).sum(dtype=np.float64)
+                    metric_sums['count'] += diff.size
                 if i % 20 == 0:
                     input = batch_x.detach().cpu().numpy()
                     if test_data.scale and self.args.inverse:
@@ -225,12 +241,17 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                     pd = np.concatenate((input[0, :, -1], pred[0, :, -1]), axis=0)
                     visual(gt, pd, os.path.join(folder_path, str(i) + '.pdf'))
 
-        preds = np.concatenate(preds, axis=0)
-        trues = np.concatenate(trues, axis=0)
-        print('test shape:', preds.shape, trues.shape)
-        preds = preds.reshape(-1, preds.shape[-2], preds.shape[-1])
-        trues = trues.reshape(-1, trues.shape[-2], trues.shape[-1])
-        print('test shape:', preds.shape, trues.shape)
+        if save_predictions:
+            preds = np.concatenate(preds, axis=0)
+            trues = np.concatenate(trues, axis=0)
+            print('test shape:', preds.shape, trues.shape)
+            preds = preds.reshape(-1, preds.shape[-2], preds.shape[-1])
+            trues = trues.reshape(-1, trues.shape[-2], trues.shape[-1])
+            print('test shape:', preds.shape, trues.shape)
+        else:
+            preds = None
+            trues = None
+            print('test shape: streaming metrics, total elements:', metric_sums['count'])
 
         # result save
         folder_path = './results/' + setting + '/'
@@ -238,7 +259,7 @@ class Exp_Long_Term_Forecast(Exp_Basic):
             os.makedirs(folder_path)
 
         # dtw calculation
-        if self.args.use_dtw:
+        if self.args.use_dtw and save_predictions:
             dtw_list = []
             manhattan_distance = lambda x, y: np.abs(x - y)
             for i in range(preds.shape[0]):
@@ -249,10 +270,20 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                 d, _, _, _ = accelerated_dtw(x, y, dist=manhattan_distance)
                 dtw_list.append(d)
             dtw = np.array(dtw_list).mean()
+        elif self.args.use_dtw:
+            dtw = 'Not calculated in streaming mode'
         else:
             dtw = 'Not calculated'
 
-        mae, mse, rmse, mape, mspe = metric(preds, trues)
+        if save_predictions:
+            mae, mse, rmse, mape, mspe = metric(preds, trues)
+        else:
+            count = metric_sums['count']
+            mae = metric_sums['abs'] / count
+            mse = metric_sums['sq'] / count
+            rmse = np.sqrt(mse)
+            mape = metric_sums['ape'] / count
+            mspe = metric_sums['spe'] / count
         print('mse:{}, mae:{}, dtw:{}'.format(mse, mae, dtw))
         f = open("result_long_term_forecast.txt", 'a')
         f.write(setting + "  \n")
@@ -262,7 +293,8 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         f.close()
 
         np.save(folder_path + 'metrics.npy', np.array([mae, mse, rmse, mape, mspe]))
-        np.save(folder_path + 'pred.npy', preds)
-        np.save(folder_path + 'true.npy', trues)
+        if save_predictions:
+            np.save(folder_path + 'pred.npy', preds)
+            np.save(folder_path + 'true.npy', trues)
 
         return

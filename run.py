@@ -112,6 +112,8 @@ if __name__ == '__main__':
     # metrics (dtw)
     parser.add_argument('--use_dtw', action='store_true', default=False,
                         help='enable dtw metric (time consuming; default: off)')
+    parser.add_argument('--save_predictions', type=int, default=1,
+                        help='save pred.npy and true.npy during test; set 0 to compute metrics in streaming mode')
 
     # Augmentation
     parser.add_argument('--augmentation_ratio', type=int, default=0, help="How many times to augment")
